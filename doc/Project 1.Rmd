@@ -1,0 +1,539 @@
+---
+title: "Gender Effect on Happy Moments Analysis"
+author: "Yunfan Li yl3838"
+output:
+  word_document: default
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+While women and men are the same species, we are actually not the same. Due to the inherent differences in physical structures between male and female, roles have been defined and redefined over time. Generally, male and female could have distinguished points of view of understanding on same issue. When it comes to daily life, this gender difference still plays an significant role. We experience various mood and feelings every day. Will gender difference plays an effect on our mood? To be more specific, how will gender affect our happy moments every day?  Is there a difference between female and male on happiness sources? This project will analyze this gender effect on happy moments based on the HappyDB dataset. 
+
+Let’s check out whether there exist difference in daily happy moments between female and male.
+
+
+```{r, message = FALSE, warning = FALSE}
+# Load necessary libraries
+library(tidyverse)
+library(tidytext)
+library(DT)
+library(scales)
+library(wordcloud)
+library(gridExtra)
+library(grid)
+library(ngram)
+library(tm)
+library(topicmodels)
+library(gplots)
+library(factoextra)
+library(countrycode)
+
+```
+```{r include=FALSE}
+# Data Preparation
+
+hm_data <- read_csv("/Users/yunfanli/Documents/GitHub/Fall2018-Proj1-yunfanli97/output/processed_moments.csv")
+bag_of_words <- read_csv("/Users/yunfanli/Documents/GitHub/Fall2018-Proj1-yunfanli97/output/bag_of_words.csv")
+word_count <- read_csv("/Users/yunfanli/Documents/GitHub/Fall2018-Proj1-yunfanli97/output/word_count.csv")
+
+## Split male and female data
+
+female_hm <- hm_data[which(hm_data$gender == "f"), ]
+male_hm <- hm_data[which(hm_data$gender == "m"), ]
+
+female.i <- which(bag_of_words$gender == "f")
+
+female_words <- bag_of_words[female.i, ]
+male_words <- bag_of_words[-female.i, ]
+
+female_word_count <-  female_words %>%
+  count(word, sort = TRUE)
+male_word_count <- male_words %>%
+  count(word, sort = TRUE)
+
+
+```
+
+
+```{r echo=TRUE}
+# Female Data 
+female_hm
+```
+
+
+```{r echo=TRUE}
+# Male Data
+male_hm
+```
+
+
+
+
+# Overview of happy moments between female and male
+
+### Word Cloud
+```{r echo=TRUE}
+# Overall Female Word Cloud 
+wordcloud(female_word_count$word, female_word_count$n,
+          scale=c(3,0.2),
+          max.words = 100,
+          min.freq = 1,
+          random.order=FALSE,
+          rot.per=0.3,
+          use.r.layout=T,
+          random.color=FALSE,
+          colors=brewer.pal(9, "Set1"))
+
+```
+
+```{r echo=TRUE}
+# Overall Male Word Cloud 
+wordcloud(male_word_count$word, male_word_count$n,
+          scale=c(3,0.2),
+          max.words = 100,
+          min.freq = 1,
+          random.order=FALSE,
+          rot.per=0.3,
+          use.r.layout=T,
+          random.color=FALSE,
+          colors=brewer.pal(9, "Set1"))
+
+```
+
+
+Each word cloud graph contains 100 high frequency words appeared in participants responses on happy moments. They represent that the top 3 word for both female and male are “friend”, “time” and “day”. The reasons behind are not hard to guess – we value friendship and social bonding.  Besides “friend”,  there are words like “family”, “husband”, “wife”…also stand out, which indicates family relations are also  important in happiness for both female and male. Let’s look at the bar plots for exact frequency for top words.
+
+
+### Bar Plot
+
+```{r echo=TRUE}
+
+# Top 10 words bar plots for female and male
+fb <- ggplot(data = female_word_count[1:10, ], aes(x = reorder(word,n), y = n)) +
+  geom_bar(stat = "identity") +
+  coord_flip()
+
+mb <- ggplot(data = male_word_count[1:10, ], aes(x = reorder(word,n), y = n)) +
+  geom_bar(stat = "identity") +
+  coord_flip()
+grid.arrange(fb, mb)
+```
+
+The bar plots shows us relatively specific frequency for top words. We could see that “friend” is the top 1 word for male participants with more than 6000 occurrences. Family member words such as “daughter” and “son” appear more frequent in female participants’ happy moments. While for male participants, “watched” and “game” are more frequent words. Based on these plots, we could reasonable guess that for female and male there probably exists different sources of happy moments. With the help of LDA, a topic modeling algorithm, we would be able to figure out what are the main topics for happy moments of female and male. Let’s check out the results!
+
+
+
+# Are there any differences in happiness sources between female and male??
+
+```{r}
+# Define LDA process function
+LDA_process <- function(data, obj_name){
+
+  corpus <- Corpus(VectorSource(data))%>%
+    tm_map(content_transformer(tolower))%>%
+    tm_map(removePunctuation)%>%
+    tm_map(removeNumbers)%>%
+    tm_map(removeWords, c(stopwords("english"),"happy","ago","yesterday","lot","today","months","month",
+                 "happier","happiest","last","week","past"))%>%
+    tm_map(stripWhitespace)
+
+  stem <- tm_map(corpus, stemDocument)
+  dtm <- DocumentTermMatrix(stem)
+  
+  rowTotals <- apply(dtm , 1, sum) #Find the sum of words in each Document
+
+  dtm  <- dtm[rowTotals> 0, ]
+  
+  #Set parameters for Gibbs sampling
+  burnin <- 4000
+  iter <- 2000
+  thin <- 500
+  seed <-list(2003,5,63,100001,765)
+  nstart <- 5
+  best <- TRUE
+  
+  #Number of topics
+  k <- 8
+  
+  #Run LDA using Gibbs sampling
+  
+  ldaOut <-LDA(dtm, k, method="Gibbs", control=list(nstart=nstart, 
+                                                 seed = seed, best=best,
+                                                 burnin = burnin, iter = iter, 
+                                                 thin=thin))
+  #write out results
+  #docs to topics
+  ldaOut.topics <- as.matrix(topics(ldaOut))
+  write.csv(ldaOut.topics, file = paste("../output/", obj_name,"_DocsToTopics.csv", sep = ""))
+
+  #top terms in each topic
+  ldaOut.terms <- as.matrix(terms(ldaOut, 20))
+  write.csv(ldaOut.terms, file = paste("../output/", obj_name, "_TopicsToTerms.csv", sep = ""))
+  
+  # probabilities associated with each topic assignment
+  topicProbabilities <- as.data.frame(ldaOut@gamma)
+  write.csv(topicProbabilities, file = paste("../output/", obj_name, "_TopicProbabilities.csv", sep = ""))
+  return(list(ldaOut.terms, topicProbabilities))
+
+  }
+
+```
+
+```{r echo=TRUE}
+
+female_topics <- LDA_process(female_hm$cleaned_hm, "Female")
+
+# Male topics
+male_topics <- LDA_process(male_hm$cleaned_hm, "Male")
+
+female_topicResults <- female_topics[[1]]
+female_topicProbabilities <- female_topics[[2]]
+male_topicResults <- male_topics[[1]]
+male_topicProbabilities <- male_topics[[2]]
+
+```
+
+
+```{r}
+female_topics.hash <- c("Shopping", "Life Moments", "Special Days Celebration","Family","Partner", "Others", "Friends/Children/Relatives Achievements", "Outdoor Activities")
+male_topics.hash <- c("Special Days Celebration","Life Moments","Outdoor Activities","Others","Leisure", "Family", "Work Achievements", "Habits")
+
+names(female_topicProbabilities) <- female_topics.hash
+names(male_topicProbabilities) <- male_topics.hash
+```
+
+By setting the number of topics to 8 in advance and then run LDA using Gibbs sampling, the terms from happy moment sentences were grouped in to 8 groups and each group represent a topic.
+
+Based on my understanding of the terms, I categorized the topics as the following.
+
+Female:
+
+Topic1: Shopping
+
+Topic2: Life Moments
+
+Topic 3: Special Days Celebration
+
+Topic 4: Family
+
+Topic 5: Partner
+
+Topic 6: Others
+
+Topic 7: Friends/Children/Relatives Achievements
+
+Topic 8: Outdoor Activities
+
+
+Male:
+
+Topic 1: Special Days Celebration
+
+Topic 2: Life Moments
+
+Topic 3: Outdoor Activities
+
+Topic 4: Others
+
+Topic 5:  Leisure
+
+Topic 6: Family
+
+Topic 7: Work Achievements
+
+Topic 8: Habits
+
+Comparing with topic results we got from topic modelling, there are several common topics for female and male[Life Moments, Special Days Celebration, Family, Outdoor Activities and Others]. These common topics are reasonable. “Family” for example, could give us strong support and love so that it can provide humans with great happiness with not doubt. Except for these common topics, female tend to gain happiness from “Shopping”, “Partner” and “Friends/Children/Relatives Achievements” while male tend to gain happiness from “Leisure”, “Work Achievements” and “Habits”. The different sources for happiness arise and let’s move on to find out more details about the difference.
+
+
+While female and male gain happiness from relatively different sources, which type of sources would be more general? In other words, which are hot happy topics for female and male?
+
+
+
+### Among these happy sources, which is more common? 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# generate heatmap for female
+heatmap.2(as.matrix(female_topicProbabilities[sample(1:nrow(female_topicProbabilities), 20), ]), Rowv = FALSE,
+          scale = "row", key = F,
+          col = bluered(100), 
+          cexRow = 0.5,
+          cexCol = 0.9,
+          margins = c(8,8),
+          trace = "none",
+          density.info = "none")
+
+```
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# generate heatmap for male
+heatmap.2(as.matrix(male_topicProbabilities[sample(1:nrow(male_topicProbabilities), 20),]), Rowv = FALSE,
+          scale = "row", key = F,
+          col = bluered(100), 
+          cexRow = 0.5,
+          cexCol = 0.9,
+          margins = c(8,8),
+          trace = "none",
+          density.info = "none")
+
+```
+
+I randomly picked 20 responses from each group(female and male) and plotted heat maps. Red color indicates the happy moment is more related to that topic. Based on the heatmap for female, we could easily notice that the topic “Partner” has the most blocks of red and then “Shopping” and “Family”. This result shows that in general, female tend to obtain much happiness from their partner(boyfriend, husband). This is reasonable since the different physical structures between female and male lead to generally different sensitivity to emotions. Female tends to be more sensitive in emotion and thus this is the probable reason why intimate relations would play significant role. In this case, intimate relations could be a more general happiness source than others. Other than “Partner”, going for shopping and spending time with family can also be two common sources of happiness for female. 
+
+For male, “Leisure” is the most common happy source. Indeed, leisure time such as spend a day with no work at home and get good rest tend to be really relaxing, especially for male. Besides, doing something they like(Habits), joining outdoor activities(Outdoor Activities) and accomplish some goals at word( Work Achievements) are also popular happiness sources for male. 
+
+
+
+# How happy moments change before and after marriage for female and male?
+
+Would marriage affect our happy moments? 
+
+### Bar Plot - Single Female and Male Happy Moments
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Top 10 words bar plots for single female and male
+single_female_words <- female_words[which(female_words$marital =="single"), ]
+single_female_word_count <- single_female_words %>%
+  count(word, sort = TRUE)
+
+
+single_male_words <- male_words[which(male_words$marital =="single"), ]
+single_male_word_count <- single_male_words %>%
+  count(word, sort = TRUE)
+
+sfb <- ggplot(data = single_female_word_count[1:10, ], aes(x = reorder(word,n), y = n)) +
+  geom_bar(stat = "identity") +
+  coord_flip()+
+  xlab("Single Female")
+
+smb <- ggplot(data = single_male_word_count[1:10, ], aes(x = reorder(word,n), y = n)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  xlab("Single Male")
+grid.arrange(sfb, smb)
+
+```
+
+
+## Bar Plot - Married Female and Male Happy Moments
+```{r echo=FALSE}
+# Top 10 words bar plots for married female and male
+married_female_words <- female_words[which(female_words$marital =="married"), ]
+married_female_word_count <- married_female_words %>%
+  count(word, sort = TRUE)
+
+married_male_words <- male_words[which(male_words$marital =="married"), ]
+married_male_word_count <- married_male_words %>%
+  count(word, sort = TRUE)
+
+mfb <- ggplot(data = married_female_word_count[1:10, ], aes(x = reorder(word,n), y = n)) +
+  geom_bar(stat = "identity") +
+  coord_flip()+
+  xlab("Married Female")
+
+mmb <- ggplot(data = married_male_word_count[1:10, ], aes(x = reorder(word,n), y = n)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  xlab("Married Male")
+grid.arrange(mfb, mmb)
+```
+
+
+Comparing between single and married female and male happy moments words bar plots, we could notice that partner role names change and “daughter”, “son” and “home” become more frequent words. We could then reasonable guess that after marriage, family and family members could be a more common source of happiness comparing with single person. Would this be applied to both male and female? Let’s check out the heapmaps comparison between female and male.
+
+
+### Heat maps
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Heat map for single female
+single_female_topicProbabilities <- female_topicProbabilities[which(female_hm$marital == "single"), ]
+heatmap.2(as.matrix(single_female_topicProbabilities[sample(1:nrow(single_female_topicProbabilities), 20), ]), 
+          Rowv = FALSE,
+          scale = "row", key = F,
+          col = bluered(100), 
+          cexRow = 0.5,
+          cexCol = 0.9,
+          margins = c(8,8),
+          trace = "none",
+          density.info = "none")
+
+```
+
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Heat map for married female
+married_female_topicProbabilities <- female_topicProbabilities[which(female_hm$marital == "married"), ]
+heatmap.2(as.matrix(married_female_topicProbabilities[sample(1:nrow(married_female_topicProbabilities), 20), ]), 
+          Rowv = FALSE,
+          scale = "row", key = F,
+          col = bluered(100), 
+          cexRow = 0.5,
+          cexCol = 0.9,
+          margins = c(8,8),
+          trace = "none",
+          density.info = "none")
+
+```
+
+One interesting result is about “Shopping”. “Shopping” seems to be the most general happy topic for single female. While for married female, “Shopping” seems to be much less attractive. This finding is interesting since shopping should be in general one of the hot topic for female. What leads to this change is probably after marriage, female tends to care more about their family and especially children if they have. Comparing with life when they are single, they have less free time for leisure and also probably less money to devote on themselves. This also explains why “Friends/Children/Relatives Achievements” and “Partner” become hot topics for married female. 
+
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Heat map for single male
+single_male_topicProbabilities <- male_topicProbabilities[which(male_hm$marital == "single"), ]
+heatmap.2(as.matrix(single_male_topicProbabilities[sample(1:nrow(single_male_topicProbabilities), 20), ]), 
+          Rowv = FALSE,
+          scale = "row", key = F,
+          col = bluered(100), 
+          cexRow = 0.5,
+          cexCol = 0.9,
+          margins = c(8,8),
+          trace = "none",
+          density.info = "none")
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Heat map for married male
+married_male_topicProbabilities <- male_topicProbabilities[which(male_hm$marital == "married"), ]
+heatmap.2(as.matrix(married_male_topicProbabilities[sample(1:nrow(married_male_topicProbabilities), 20), ]), 
+          Rowv = FALSE,
+          scale = "row", key = F,
+          col = bluered(100), 
+          cexRow = 0.5,
+          cexCol = 0.9,
+          margins = c(8,8),
+          trace = "none",
+          density.info = "none")
+```
+
+
+For male, the change in happy topics is relatively less obvious. We could catch the increase in happiness related with “Work Achievement” for married male. One probably reason for explaining this change is that after marriage, male tends to feel more pressure and have more responsibilities on family. Comparing with single period, accomplishments in work would be more significant since these could indicate a better support for their family. Therefore, it would be reasonable to consider “Work Achievements“ as a hot happiness topic after marriage. 
+
+
+
+# Do happy topics different among different age ranges for female and male?
+
+While you may also be interested in whether people with different age tends to gain happiness from different topics. Would this be true for both female and male?? 
+
+## Cluster Topics by Age for Female
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Data formatting and preparation 
+
+# correct typing errors
+female_hm[which(female_hm$age == "3" | female_hm$age == "3.0"), ]$age <- "30"
+
+female_hm[which(female_hm$age == 227), ]$age <- 27
+# format age to numbers only (eg 30 instead of 30.0)
+female_hm$age <- substr(female_hm$age, 1, 2)
+
+
+age_female_topicProbabilities <- cbind(female_topicProbabilities, female_hm$age)
+
+colnames(age_female_topicProbabilities)[ncol(age_female_topicProbabilities)] <- "age"
+
+age_female_topicProbabilities<-aggregate(age_female_topicProbabilities[1:8], list(age_female_topicProbabilities$age), mean)
+
+```
+
+```{r echo=TRUE}
+
+# Cluster topics by age for female
+female_cluster_data <- as.matrix(age_female_topicProbabilities[,-1])
+rownames(female_cluster_data) <- age_female_topicProbabilities[,1]
+female_fit <- kmeans(female_cluster_data, iter.max = 200, 4)
+fviz_cluster(female_fit, 
+             stand = F, 
+             repel = TRUE,
+             data = female_cluster_data, 
+             xlab = "", ylab = "", xaxt = "n",
+             show.clust.cent = FALSE)
+```
+
+
+## Cluster Topics by Age for Male
+```{r message=FALSE, warning=FALSE}
+# Data formatting and preparation 
+
+# correct typing errors
+male_hm[which(male_hm$age == "2" | male_hm$age == "2.0"), ]$age <- "20"
+
+male_hm[which(male_hm$age == 3), ]$age <- 30
+# format age to numbers only (eg 30 instead of 30.0)
+male_hm$age <- substr(male_hm$age, 1, 2)
+
+age_male_topicProbabilities <- cbind(male_topicProbabilities, male_hm$age[-1])
+colnames(age_male_topicProbabilities)[ncol(age_male_topicProbabilities)] <- "age"
+
+age_male_topicProbabilities<-aggregate(male_topicProbabilities[1:8], list(age_male_topicProbabilities$age), mean)
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Cluster topics by age for male
+male_cluster_data <- as.matrix(age_male_topicProbabilities[,-1])
+rownames(male_cluster_data) <- age_male_topicProbabilities[,1]
+male_fit <- kmeans(male_cluster_data, iter.max = 200, 4)
+fviz_cluster(male_fit, 
+             stand = F, 
+             repel = TRUE,
+             data = male_cluster_data, 
+             xlab = "", ylab = "", xaxt = "n",
+             show.clust.cent = FALSE)
+```
+
+
+Based on the clustering result for female, we could clearly notice there are four clusters and there is a small overlap between two clusters. For cluster 1, it contains mostly points with younger age. The cluster 2 contains age with most points belongs to 40s, 50s and 60s. While for the cluster result for male, the overlap is a serious issue, which indicates that there is not a clear difference in happy topics for male with different age range. 
+
+
+
+# Do happy topics different among different regions for female and male?
+
+
+```{r echo=TRUE}
+
+country_female_topicProbabilities <- cbind(female_topicProbabilities, countrycode(sourcevar = female_hm$country, "iso3c", "country.name"))
+colnames(country_female_topicProbabilities)[ncol(country_female_topicProbabilities)] <- "country"
+
+country_female_topicProbabilities<-aggregate(country_female_topicProbabilities[1:8], list(country_female_topicProbabilities$country), mean)
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Cluster topics by country for female
+female_cluster_data <- as.matrix(country_female_topicProbabilities[,-1])
+rownames(female_cluster_data) <- country_female_topicProbabilities[,1]
+female_fit <- kmeans(female_cluster_data, iter.max = 200, nstart = 5,5)
+fviz_cluster(female_fit, 
+             stand = F, 
+             repel = TRUE,
+             data = female_cluster_data, 
+             xlab = "", ylab = "", xaxt = "n",
+             show.clust.cent = FALSE)
+
+```
+
+
+```{r echo=TRUE}
+
+country_male_topicProbabilities <- cbind(male_topicProbabilities, countrycode(sourcevar = male_hm$country, "iso3c", "country.name")[-1])
+colnames(country_male_topicProbabilities)[ncol(country_male_topicProbabilities)] <- "country"
+
+country_male_topicProbabilities<-aggregate(country_male_topicProbabilities[1:8], list(country_male_topicProbabilities$country), mean)
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Cluster topics by country for male
+male_cluster_data <- as.matrix(country_male_topicProbabilities[,-1])
+rownames(male_cluster_data) <- country_male_topicProbabilities[,1]
+male_fit <- kmeans(male_cluster_data, iter.max = 200, nstart = 5,5)
+fviz_cluster(male_fit, 
+             stand = F, 
+             repel = TRUE,
+             data = male_cluster_data, 
+             xlab = "", ylab = "", xaxt = "n",
+             show.clust.cent = FALSE)
+
+```
+
+How about happy moments for female male from different regions? The clustering results shows that there is no obvious happy source difference for both female and male.
